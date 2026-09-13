@@ -1,0 +1,61 @@
+{
+  "total": 7,
+  "passed": 7,
+  "failed": 0,
+  "precision": 1.0,
+  "recall": 1.0,
+  "f1": 1.0,
+  "false_positive_rate": 0.0,
+  "false_negative_rate": 0.0,
+  "cases": [
+    {
+      "name": "noise-short",
+      "block": "noise",
+      "expected": false,
+      "actual": false,
+      "passed": true
+    },
+    {
+      "name": "noise-signal",
+      "block": "noise",
+      "expected": true,
+      "actual": true,
+      "passed": true
+    },
+    {
+      "name": "loop-fourth",
+      "block": "loop",
+      "expected": false,
+      "actual": false,
+      "passed": true
+    },
+    {
+      "name": "quote-valid",
+      "block": "citation",
+      "expected": true,
+      "actual": true,
+      "passed": true
+    },
+    {
+      "name": "quote-invalid",
+      "block": "citation",
+      "expected": false,
+      "actual": false,
+      "passed": true
+    },
+    {
+      "name": "refusal-valid",
+      "block": "citation",
+      "expected": true,
+      "actual": true,
+      "passed": true
+    },
+    {
+      "name": "combined",
+      "block": "combined",
+      "expected": true,
+      "actual": true,
+      "passed": true
+    }
+  ]
+}
