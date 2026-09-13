@@ -1,61 +1,453 @@
 {
-  "total": 7,
-  "passed": 7,
-  "failed": 0,
-  "precision": 1.0,
-  "recall": 1.0,
-  "f1": 1.0,
-  "false_positive_rate": 0.0,
-  "false_negative_rate": 0.0,
-  "cases": [
-    {
-      "name": "noise-short",
-      "block": "noise",
-      "expected": false,
-      "actual": false,
-      "passed": true
+  "config": {
+    "name": "governor-golden-set",
+    "thresholds": {
+      "noise_gate_min_words": 3,
+      "noise_gate_min_chars": 8,
+      "noise_gate_min_unique_words": 2,
+      "loop_window_seconds": 300,
+      "loop_max_events": 3,
+      "quote_overlap": 0.9,
+      "prose_overlap": 0.35
     },
-    {
-      "name": "noise-signal",
-      "block": "noise",
-      "expected": true,
-      "actual": true,
-      "passed": true
-    },
-    {
-      "name": "loop-fourth",
-      "block": "loop",
-      "expected": false,
-      "actual": false,
-      "passed": true
-    },
-    {
-      "name": "quote-valid",
-      "block": "citation",
-      "expected": true,
-      "actual": true,
-      "passed": true
-    },
-    {
-      "name": "quote-invalid",
-      "block": "citation",
-      "expected": false,
-      "actual": false,
-      "passed": true
-    },
-    {
-      "name": "refusal-valid",
-      "block": "citation",
-      "expected": true,
-      "actual": true,
-      "passed": true
-    },
-    {
-      "name": "combined",
-      "block": "combined",
-      "expected": true,
-      "actual": true,
-      "passed": true
-    }
-  ]
+    "total_cases": 27
+  },
+  "noise": {
+    "n": 9,
+    "tp": 5,
+    "fp": 0,
+    "tn": 4,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "false_positive_rate": 0.0,
+    "false_negative_rate": 0.0,
+    "fails": [],
+    "cases": [
+      {
+        "name": "noise-short",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "noise-signal",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "noise-very-short",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "noise-numeric-only",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "noise-mixed",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "noise-casefold",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "noise-stopwordish",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "noise-duplicate",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "noise-long",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      }
+    ]
+  },
+  "loop": {
+    "n": 6,
+    "tp": 5,
+    "fp": 0,
+    "tn": 1,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "false_positive_rate": 0.0,
+    "false_negative_rate": 0.0,
+    "fails": [],
+    "cases": [
+      {
+        "name": "loop-1",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "loop-2",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "loop-3",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "loop-fourth",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "loop-stale-reset",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "loop-other-agent",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      }
+    ]
+  },
+  "citation": {
+    "n": 12,
+    "tp": 5,
+    "fp": 0,
+    "tn": 7,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "false_positive_rate": 0.0,
+    "false_negative_rate": 0.0,
+    "fails": [],
+    "cases": [
+      {
+        "name": "quote-valid",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "quote-invalid",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "refusal-valid",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "refusal-invalid",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "prose-valid",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "prose-invalid",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "multiple-quotes-valid",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "multiple-quotes-invalid",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "cite_fabricated_number",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "empty-source-fails",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "short-quote-valid",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "paraphrase-low-overlap",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      }
+    ]
+  },
+  "combined": {
+    "n": 27,
+    "tp": 15,
+    "fp": 0,
+    "tn": 12,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "false_positive_rate": 0.0,
+    "false_negative_rate": 0.0,
+    "fails": [],
+    "cases": [
+      {
+        "name": "noise-short",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "noise-signal",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "noise-very-short",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "noise-numeric-only",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "noise-mixed",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "noise-casefold",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "noise-stopwordish",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "noise-duplicate",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "noise-long",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "loop-1",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "loop-2",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "loop-3",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "loop-fourth",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "loop-stale-reset",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "loop-other-agent",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "quote-valid",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "quote-invalid",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "refusal-valid",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "refusal-invalid",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "prose-valid",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "prose-invalid",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "multiple-quotes-valid",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "multiple-quotes-invalid",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "cite_fabricated_number",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "empty-source-fails",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "short-quote-valid",
+        "expected": true,
+        "actual": true,
+        "block": "combined",
+        "passed": true
+      },
+      {
+        "name": "paraphrase-low-overlap",
+        "expected": false,
+        "actual": false,
+        "block": "combined",
+        "passed": true
+      }
+    ]
+  }
 }
