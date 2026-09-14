@@ -22,6 +22,11 @@ load_dotenv()
 
 DB_PATH = os.getenv("GOVERNOR_DB", "./governor.db")
 CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma_db")
+RAG_COLLECTION = os.getenv("RAG_COLLECTION", "governor-documents")
+RAG_MODEL = os.getenv("RAG_MODEL", os.getenv("OLLAMA_MODEL", "llama3.2"))
+RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", os.getenv("EMBED_MODEL", "nomic-embed-text"))
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "4"))
 OPERATOR_KEY = os.getenv("GOVERNOR_OPERATOR_KEY", "")
 REFUSAL = "I cannot answer from the supplied sources."
 WORD_RE = re.compile(r"[A-Za-z0-9']+")
@@ -139,6 +144,35 @@ def hash_collection_contents(collection: Any) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _vector_store() -> Any:
+    """Create the persistent Chroma store only when a live RAG request needs it."""
+    from langchain_community.vectorstores import Chroma
+    from langchain_ollama import OllamaEmbeddings
+
+    return Chroma(
+        collection_name=RAG_COLLECTION,
+        persist_directory=CHROMA_PATH,
+        embedding_function=OllamaEmbeddings(model=RAG_EMBEDDING_MODEL, base_url=OLLAMA_BASE_URL),
+    )
+
+
+def _rag_retrieve(query: str, top_k: int = RAG_TOP_K) -> list[str]:
+    documents = _vector_store().similarity_search(query, k=top_k)
+    return [document.page_content for document in documents]
+
+
+def _rag_generate(query: str, source_chunks: list[str]) -> str:
+    from langchain_ollama import ChatOllama
+
+    prompt = (
+        "Answer the question using only the supplied sources. "
+        f"If the sources do not answer it, say exactly: {REFUSAL}\n\n"
+        f"Sources:\n{chr(10).join(source_chunks)}\n\nQuestion: {query}"
+    )
+    response = ChatOllama(model=RAG_MODEL, temperature=0, base_url=OLLAMA_BASE_URL).invoke(prompt)
+    return str(response.content)
+
+
 def verify_chain() -> bool:
     with _connect() as db:
         entries = db.execute("SELECT * FROM log ORDER BY id").fetchall()
@@ -221,6 +255,26 @@ def govern(agent_id: str, query: str, retrieve: Callable[[str], list[str]], gene
 
 class AgentRequest(BaseModel):
     agent_id: str
+    initial_balance: float = 10
+
+
+class GovernRequest(BaseModel):
+    agent_id: str
+    query: str
+    source_chunks: list[str] = []
+    answer: str
+    request_id: str | None = None
+
+
+class IngestRequest(BaseModel):
+    documents: list[str]
+
+
+class RagRequest(BaseModel):
+    agent_id: str
+    query: str
+    top_k: int = RAG_TOP_K
+    request_id: str | None = None
 
 
 @asynccontextmanager
@@ -240,8 +294,13 @@ def _operator_required(key: str | None) -> None:
 @app.post("/admin/agent")
 def register_agent(request: AgentRequest, x_operator_key: str | None = Header(default=None)) -> dict[str, str]:
     _operator_required(x_operator_key)
+    if request.initial_balance < 0:
+        raise HTTPException(status_code=422, detail="initial_balance must be non-negative")
     with _connect() as db:
-        db.execute("INSERT OR IGNORE INTO agents(agent_id, created_at) VALUES (?, ?)", (request.agent_id, time.time()))
+        db.execute(
+            "INSERT OR IGNORE INTO agents(agent_id, balance, created_at) VALUES (?, ?, ?)",
+            (request.agent_id, request.initial_balance, time.time()),
+        )
     return {"status": "registered", "agent_id": request.agent_id}
 
 
@@ -251,6 +310,47 @@ def refresh(x_operator_key: str | None = Header(default=None)) -> dict[str, str]
     with _connect() as db:
         db.execute("UPDATE cycle SET restricted = 0, request_count = 0, updated_at = ? WHERE id = 1", (time.time(),))
     return {"status": "refreshed"}
+
+
+@app.post("/govern")
+def govern_request(request: GovernRequest) -> dict[str, Any]:
+    """Universal adapter for agents and model providers to test governance."""
+    return govern(
+        agent_id=request.agent_id,
+        query=request.query,
+        retrieve=lambda _: request.source_chunks,
+        generate=lambda _, __: request.answer,
+        request_id=request.request_id,
+    )
+
+
+@app.post("/rag/ingest")
+def ingest(request: IngestRequest, x_operator_key: str | None = Header(default=None)) -> dict[str, Any]:
+    """Add source documents to the persistent Chroma collection."""
+    _operator_required(x_operator_key)
+    documents = [document.strip() for document in request.documents if document.strip()]
+    if not documents:
+        raise HTTPException(status_code=422, detail="documents must contain non-empty text")
+    from langchain_core.documents import Document
+
+    store = _vector_store()
+    ids = [hashlib.sha256(document.encode()).hexdigest() for document in documents]
+    store.add_documents([Document(page_content=document) for document in documents], ids=ids)
+    return {"status": "ingested", "count": len(documents), "collection": RAG_COLLECTION}
+
+
+@app.post("/rag/query")
+def rag_query(request: RagRequest) -> dict[str, Any]:
+    """Retrieve from Chroma and generate through the deterministic governor."""
+    if request.top_k < 1 or request.top_k > 20:
+        raise HTTPException(status_code=422, detail="top_k must be between 1 and 20")
+    return govern(
+        agent_id=request.agent_id,
+        query=request.query,
+        retrieve=lambda query: _rag_retrieve(query, request.top_k),
+        generate=_rag_generate,
+        request_id=request.request_id,
+    )
 
 
 @app.get("/health")
