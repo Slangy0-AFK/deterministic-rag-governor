@@ -39,6 +39,11 @@ printf 'GOVERNOR_OPERATOR_KEY=change-me\n' > .env
 docker compose up -d --build
 ```
 
+The compose stack starts FastAPI, Chroma persistence, and Ollama. On first
+startup the `ollama-models` service downloads `llama3.2` and
+`nomic-embed-text`; override `RAG_MODEL` or `RAG_EMBEDDING_MODEL` in `.env` to
+use different Ollama models.
+
 Run the deterministic golden set:
 
 ```sh
@@ -101,6 +106,35 @@ curl -X POST http://localhost:8000/govern \
 
 The caller owns retrieval and generation. The governor applies its deterministic
 controls to the submitted request and answer.
+
+## Live RAG API
+
+Register an agent with spend, ingest source documents, and query the real
+Chroma/Ollama pipeline:
+
+```sh
+curl -X POST http://localhost:8000/admin/agent \
+	-H 'content-type: application/json' \
+	-H 'x-operator-key: change-me' \
+	-d '{"agent_id":"rag-demo","initial_balance":10}'
+
+curl -X POST http://localhost:8000/rag/ingest \
+	-H 'content-type: application/json' \
+	-H 'x-operator-key: change-me' \
+	-d '{"documents":["The archive retention period is seven years."]}'
+
+curl -X POST http://localhost:8000/rag/query \
+	-H 'content-type: application/json' \
+	-d '{"agent_id":"rag-demo","query":"What is the archive retention period?"}'
+```
+
+The query endpoint performs embedding-based retrieval and model generation, then
+sends both through the same deterministic governor path as `/govern`. The
+opt-in live integration test requires the stack to be running:
+
+```sh
+RUN_LIVE_RAG=1 python -m unittest tests.test_live_rag -v
+```
 
 ## Expected results
 
