@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "scripts": {
+    "test:model": "python model_test_runner.py"
+  }
+}

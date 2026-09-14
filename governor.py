@@ -223,6 +223,14 @@ class AgentRequest(BaseModel):
     agent_id: str
 
 
+class GovernRequest(BaseModel):
+    agent_id: str
+    query: str
+    source_chunks: list[str] = []
+    answer: str
+    request_id: str | None = None
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
@@ -251,6 +259,18 @@ def refresh(x_operator_key: str | None = Header(default=None)) -> dict[str, str]
     with _connect() as db:
         db.execute("UPDATE cycle SET restricted = 0, request_count = 0, updated_at = ? WHERE id = 1", (time.time(),))
     return {"status": "refreshed"}
+
+
+@app.post("/govern")
+def govern_request(request: GovernRequest) -> dict[str, Any]:
+    """Universal adapter for agents and model providers to test governance."""
+    return govern(
+        agent_id=request.agent_id,
+        query=request.query,
+        retrieve=lambda _: request.source_chunks,
+        generate=lambda _, __: request.answer,
+        request_id=request.request_id,
+    )
 
 
 @app.get("/health")
