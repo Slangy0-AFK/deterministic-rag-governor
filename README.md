@@ -1,49 +1,110 @@
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/dougleslie00-afk/deterministic-rag-governor)
+# What this project is
 
-# Deterministic RAG Governor
+This project is a simple gatekeeper for AI agents that use document search and answer generation.
 
-Deterministic control plane for RAG agents. No LLM in the decision path.
+It does not decide what the answer should be. It does not replace the document search or the model. Instead, it sits in front of those steps and decides whether a request should be allowed through, whether it should be stopped, and whether it can be reused from a cache.
 
-Every request passes:
-identity → noise gate → loop gate → exact cache → retrieval cache
-→ pre-charged spend → RAG → citation check → release or hold
-→ hash-chained log → base-60 audit cycle
+In plain terms, it helps answer a basic question:
 
-The governor owns policy, spend accounting, caching, and audit decisions. Retrieval and generation remain supplied by a small adapter; the governor does not provide an LLM, vector store, document-ingestion pipeline, or tenant isolation.
+- Is this request from a valid agent?
+- Is it noisy or low-quality?
+- Has it been repeated too often?
+- Is there a cached answer we can safely reuse?
+- Does the answer actually match the source material?
+- Is the agent still allowed to spend its budget?
+- Should we keep a record of what happened?
 
-## Configure
+# What it does for agents
 
-Use Python 3.11 and copy `.env.example` to `.env`. Set `GOVERNOR_OPERATOR_KEY` to a long random value, then point `GOVERNOR_RAG_ADAPTER` at a factory in an importable Python module. The factory must return an object with synchronous `retrieve(query) -> list[str]` and `generate(query, chunks) -> str` methods. For cache reuse, expose a stable string `version` property or zero-argument method that changes whenever the source corpus changes. Without it, requests bypass both caches. Adapter modules and their dependencies must be included in the image for Docker deployments.
+The system is designed to reduce a few common failure modes in agent workflows:
 
-## Run
+- repeat spam or looped requests
+- blocked or invalid identities
+- low-quality prompts that waste compute
+- repeated answers that do not reflect the source material
+- agents spending more than they should
+- weak traceability when something goes wrong
 
-```sh
-python -m pip install -r requirements.txt
-python -m unittest discover -s tests -p 'test_*.py'
-python tests/golden_set.py --json report.json
-docker compose up --build -d
-```
+It works by checking each request in a fixed sequence before an answer is released.
 
-The service is bound to `127.0.0.1:8000`; SQLite and adapter data persist in the `governor_data` volume. `/health` reports audit-chain integrity and adapter configuration. `/ready` returns 503 until an adapter is configured and the audit chain verifies.
+1. Is the agent known and active?
+2. Is the request meaningful enough to process?
+3. Has the agent triggered too many requests in a short time?
+4. Is there an exact cached answer already known?
+5. Is there a retrieval cache for the same question and source set?
+6. Does the agent still have budget available?
+7. Did the model return an answer that matches the source material closely enough?
+8. Was the request logged in a way that can be audited later?
 
-Register and fund an agent with the operator key, then submit a governed request:
+If any of these checks fail, the request is held and the reason is recorded.
 
-```sh
-curl -X POST http://127.0.0.1:8000/admin/agent \
-	-H "X-Operator-Key: $GOVERNOR_OPERATOR_KEY" \
-	-H 'Content-Type: application/json' -d '{"agent_id":"lab-agent"}'
-curl -X POST http://127.0.0.1:8000/admin/agent/credit \
-	-H "X-Operator-Key: $GOVERNOR_OPERATOR_KEY" \
-	-H 'Content-Type: application/json' -d '{"agent_id":"lab-agent","amount":10}'
-curl -X POST http://127.0.0.1:8000/govern \
-	-H 'Content-Type: application/json' \
-	-d '{"agent_id":"lab-agent","query":"Summarize the supplied source"}'
-```
+# The bottlenecks it is meant to solve
 
-Requests fail closed when no RAG adapter is configured. The HTTP suite uses a fake adapter and requires no model or vector database. Generation failures consume the precharged unit and are written as holds; retrieval failures are also audited but are not charged. Golden-set checks pass/fail the implemented gates, not model quality: the set is small, author-written, and must be expanded with independent adversarial cases before relying on its metrics. Thresholds to attack include 90% quote overlap, 35% prose overlap, and three requests per agent in 300 seconds.
+This project is focused on operational bottlenecks, not model quality.
 
-## Production Limits
+The main problems it tries to reduce are:
 
-The operator key is a shared admin credential, SQLite is suitable for a small single-node deployment, and the hash chain is tamper-evident only while its database is trusted. Put the service behind authenticated TLS, protect backups and adapter credentials, and use an external database/audit sink before multi-node or high-volume deployment. This is not containment, alignment, tamper-proof, credential-safe, or model-attesting.
+- wasted inference on repeated questions
+- runaway requests from a single agent
+- garbage or vague prompts that still trigger full processing
+- answers that sound plausible but do not reflect the actual source material
+- hard-to-debug request chains without a record of what happened
+- no clear spend control for agent activity
 
-**Baseline:** see `report.json`. **License:** MIT.
+It is not trying to solve:
+
+- model safety
+- prompt injection protection
+- secret handling
+- user identity trust
+- general AI alignment
+- multi-tenant security isolation
+
+Those are separate concerns and need different controls.
+
+# How this project is different
+
+This project is intentionally simple and deterministic.
+
+It does not rely on hidden model judgment to decide whether an answer is acceptable. It uses fixed checks, cached results, source matching, and an append-only audit trail. That makes it easier to understand, easier to test, and easier to reason about during small experiments or lab setups.
+
+The key idea is to make agent calls more predictable and less wasteful before they reach a model or a document pipeline.
+
+# What this project is not
+
+This project does not:
+
+- guarantee the model is safe
+- guarantee the agent is trustworthy
+- guarantee that the answer is correct
+- manage credentials or secrets
+- replace proper security controls
+- act as a complete production control plane for a large system
+
+It is a practical guardrail for a small, controlled deployment where the goal is to reduce waste, limit repetition, and provide basic traceability.
+
+# Example flow
+
+A request comes in.
+
+- the agent is checked
+- the prompt is examined for usefulness
+- the rate of requests is checked
+- cached results are considered
+- available budget is checked
+- the answer is compared to the source material
+- the decision is recorded
+
+If the answer passes, it is released. If not, it is held.
+
+# Limitations
+
+This project is a baseline tool, not a full enterprise platform.
+
+It is best for a single-node, small-lab, or controlled internal environment. It stores its state in a local SQLite database and is not designed to replace a larger operational system with heavy traffic, many teams, or strict compliance requirements.
+
+In other words, it is useful for reducing obvious agent bottlenecks and making request behavior easier to understand, but it is not a complete production security or governance system on its own.
+
+# License
+
+MIT.
