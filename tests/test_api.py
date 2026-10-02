@@ -115,6 +115,30 @@ class GovernorApiTests(unittest.TestCase):
             balance = db.execute("SELECT balance FROM agents WHERE agent_id = ?", ("lab-agent",)).fetchone()[0]
         self.assertEqual(balance, 0)
 
+    def test_ungrounded_answer_is_not_returned(self) -> None:
+        class UngroundedAdapter(FakeRagAdapter):
+            def generate(self, query: str, chunks: list[str]) -> str:
+                return "An unrelated answer with no supporting source material."
+
+        self.register_agent()
+        self.client.post(
+            "/admin/agent/credit",
+            headers={"X-Operator-Key": OPERATOR_KEY},
+            json={"agent_id": "lab-agent", "amount": 1},
+        )
+        governor.app.state.rag_adapter = UngroundedAdapter()
+
+        response = self.client.post(
+            "/govern",
+            json={"agent_id": "lab-agent", "query": "Summarize the source audit record"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["released"], False)
+        self.assertEqual(response.json()["reason"], "citation_check")
+        self.assertNotIn("answer", response.json())
+        self.assertTrue(governor.verify_chain())
+
     def test_request_without_adapter_is_not_ready(self) -> None:
         governor.app.state.rag_adapter = None
         self.assertEqual(self.client.get("/ready").status_code, 503)

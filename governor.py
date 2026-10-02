@@ -244,7 +244,11 @@ def govern(
                 _cycle()
                 return decision
             released = citation_check(answer, chunks)
-            decision = {"released": released, "answer": answer, "reason": "citation_check" if not released else "rag"}
+            decision = (
+                {"released": True, "answer": answer, "reason": "rag"}
+                if released
+                else {"released": False, "reason": "citation_check"}
+            )
             if released and cache_key:
                 with _connect() as db:
                     db.execute("INSERT OR REPLACE INTO cache(cache_key, answer, created_at) VALUES (?, ?, ?)", (cache_key, answer, time.time()))
