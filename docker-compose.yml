@@ -1,10 +1,17 @@
 services:
   web:
     build: .
+    restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${GOVERNOR_PORT:-8000}:8000"
+    environment:
+      GOVERNOR_OPERATOR_KEY: ${GOVERNOR_OPERATOR_KEY:?Set GOVERNOR_OPERATOR_KEY in .env}
+      GOVERNOR_RAG_ADAPTER: ${GOVERNOR_RAG_ADAPTER:-}
     volumes:
-      - ./governor.db:/app/governor.db
-      - ./chroma_db:/app/chroma_db
+      - governor_data:/data
     env_file:
-      - .env
+      - path: .env
+        required: false
+
+volumes:
+  governor_data:
