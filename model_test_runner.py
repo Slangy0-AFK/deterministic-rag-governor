@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from urllib import error, request
+from urllib.parse import urlsplit
 
 import governor
 
@@ -34,6 +35,14 @@ def model_completion(query: str, source_chunks: list[str]) -> str:
         raise ValueError("MODEL_ID is required")
     if not endpoint:
         raise ValueError("MODEL_BASE_URL is required for custom providers")
+    parsed_endpoint = urlsplit(endpoint)
+    if (
+        parsed_endpoint.scheme not in {"http", "https"}
+        or not parsed_endpoint.hostname
+        or parsed_endpoint.username is not None
+        or parsed_endpoint.password is not None
+    ):
+        raise ValueError("MODEL_BASE_URL must be an HTTP(S) URL without embedded credentials")
 
     prompt = "\n\n".join(source_chunks)
     payload = {
@@ -55,7 +64,10 @@ def model_completion(query: str, source_chunks: list[str]) -> str:
         headers["authorization"] = f"Bearer {api_key}"
     body = json.dumps(payload).encode()
     try:
-        with request.urlopen(request.Request(endpoint, data=body, headers=headers, method="POST")) as response:
+        # Endpoint scheme was restricted to HTTP(S) above.
+        with request.urlopen(  # nosec B310
+            request.Request(endpoint, data=body, headers=headers, method="POST")
+        ) as response:
             result = json.loads(response.read())
     except error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")

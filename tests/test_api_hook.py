@@ -53,6 +53,33 @@ class UniversalHookTest(unittest.TestCase):
         self.assertFalse(response.json()["released"])
         self.assertEqual(response.json()["reason"], "citation_check")
 
+    def test_liveness_and_readiness_endpoints(self) -> None:
+        with TestClient(governor.app) as client:
+            live = client.get("/healthz")
+            ready = client.get("/readyz")
+
+        self.assertEqual(live.status_code, 200)
+        self.assertEqual(live.json(), {"ok": True})
+        self.assertEqual(ready.status_code, 200)
+        self.assertEqual(ready.json(), {"ok": True})
+
+    def test_metrics_endpoint_requires_configured_bearer_token(self) -> None:
+        original_token = governor.PROMETHEUS_BEARER_TOKEN
+        governor.PROMETHEUS_BEARER_TOKEN = "test-metrics-token"
+        try:
+            with TestClient(governor.app) as client:
+                unauthorized = client.get("/metrics")
+                authorized = client.get(
+                    "/metrics",
+                    headers={"Authorization": "Bearer test-metrics-token"},
+                )
+        finally:
+            governor.PROMETHEUS_BEARER_TOKEN = original_token
+
+        self.assertEqual(unauthorized.status_code, 401)
+        self.assertEqual(authorized.status_code, 200)
+        self.assertIn("governor_up 1", authorized.text)
+
 
 if __name__ == "__main__":
     unittest.main()

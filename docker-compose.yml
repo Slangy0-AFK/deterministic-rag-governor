@@ -28,6 +28,7 @@ services:
       ollama-models:
         condition: service_completed_successfully
     build: .
+    image: ${GOVERNOR_IMAGE_REPOSITORY:-deterministic-rag-governor}:${GOVERNOR_IMAGE_TAG:-local}
     ports:
       - "8000:8000"
     volumes:

@@ -7,3 +7,4 @@ langchain-community==0.3.17
 langchain-ollama==0.2.3
 chromadb==0.6.3
 sentence-transformers==3.4.1
+sentry-sdk[fastapi]==2.22.0

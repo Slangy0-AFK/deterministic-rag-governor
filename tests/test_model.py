@@ -44,5 +44,19 @@ class ModelClientTest(unittest.TestCase):
         self.assertEqual(captured["body"]["model"], "user-model")
 
 
+    def test_rejects_non_http_provider_url(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "MODEL_PROVIDER": "custom",
+                "MODEL_BASE_URL": "file:///etc/passwd",
+                "MODEL_ID": "user-model",
+            },
+            clear=False,
+        ):
+            with self.assertRaisesRegex(ValueError, "must be an HTTP\\(S\\) URL"):
+                model_test_runner.model_completion("What happened?", ["An event happened."])
+
+
 if __name__ == "__main__":
     unittest.main()

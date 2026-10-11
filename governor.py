@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -17,8 +18,35 @@ from typing import Any, Callable, Iterable
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 
 load_dotenv()
+
+class JsonLogFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, Any] = {
+            "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        for field in ("method", "path", "status_code", "duration_ms"):
+            if hasattr(record, field):
+                payload[field] = getattr(record, field)
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        return json.dumps(payload, separators=(",", ":"))
+
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    handlers=[logging.StreamHandler()],
+)
+for _handler in logging.getLogger().handlers:
+    _handler.setFormatter(JsonLogFormatter())
+logger = logging.getLogger("governor")
 
 DB_PATH = os.getenv("GOVERNOR_DB", "./governor.db")
 CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma_db")
@@ -28,8 +56,19 @@ RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", os.getenv("EMBED_MODEL", 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "4"))
 OPERATOR_KEY = os.getenv("GOVERNOR_OPERATOR_KEY", "")
+PROMETHEUS_BEARER_TOKEN = os.getenv("PROMETHEUS_BEARER_TOKEN", "")
 REFUSAL = "I cannot answer from the supplied sources."
 WORD_RE = re.compile(r"[A-Za-z0-9']+")
+SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+
+if SENTRY_DSN:
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=os.getenv("SENTRY_ENVIRONMENT", "production"),
+        send_default_pii=False,
+    )
 
 
 def _connect() -> sqlite3.Connection:
@@ -277,6 +316,26 @@ class RagRequest(BaseModel):
     request_id: str | None = None
 
 
+class StructuredRequestLoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: Callable[..., Any]) -> Response:
+        started_at = time.perf_counter()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        finally:
+            logger.info(
+                "http_request",
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": status_code,
+                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                },
+            )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
@@ -284,6 +343,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Deterministic RAG Governor", lifespan=lifespan)
+app.add_middleware(StructuredRequestLoggingMiddleware)
 
 
 def _operator_required(key: str | None) -> None:
@@ -356,3 +416,50 @@ def rag_query(request: RagRequest) -> dict[str, Any]:
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "chain_valid": verify_chain()}
+
+
+@app.get("/healthz")
+def healthz() -> dict[str, bool]:
+    return {"ok": True}
+
+
+@app.get("/readyz")
+def readyz() -> Response:
+    try:
+        with _connect() as db:
+            db.execute("SELECT 1")
+        chain_valid = verify_chain()
+    except sqlite3.Error:
+        logger.exception("readiness_check_failed")
+        return Response(
+            content=json.dumps({"ok": False, "reason": "database_unavailable"}),
+            status_code=503,
+            media_type="application/json",
+        )
+    if not chain_valid:
+        return Response(
+            content=json.dumps({"ok": False, "reason": "audit_chain_invalid"}),
+            status_code=503,
+            media_type="application/json",
+        )
+    return Response(
+        content=json.dumps({"ok": True}),
+        media_type="application/json",
+    )
+
+
+@app.get("/metrics")
+def metrics(authorization: str | None = Header(default=None)) -> Response:
+    if not PROMETHEUS_BEARER_TOKEN:
+        raise HTTPException(status_code=404, detail="metrics are not enabled")
+    expected = f"Bearer {PROMETHEUS_BEARER_TOKEN}"
+    if authorization is None or not hmac.compare_digest(authorization, expected):
+        raise HTTPException(status_code=401, detail="bearer token required")
+    return Response(
+        content=(
+            "# HELP governor_up Whether the governor process is serving metrics.\n"
+            "# TYPE governor_up gauge\n"
+            "governor_up 1\n"
+        ),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )

@@ -32,7 +32,10 @@ privacy, and adversarial-evaluation architecture.
 
 ## How to run
 
-Set an operator key before starting the service:
+Set an operator key before starting the service. The Compose image is tagged
+`deterministic-rag-governor:local` by default; deployments can select an image
+repository and immutable release tag with `GOVERNOR_IMAGE_REPOSITORY` and
+`GOVERNOR_IMAGE_TAG`.
 
 ```sh
 printf 'GOVERNOR_OPERATOR_KEY=change-me\n' > .env
@@ -167,6 +170,39 @@ Other expected decisions include:
 | Fourth request in 300 seconds | `released: false`, `reason: loop_gate` |
 | Agent balance is below one unit | `released: false`, `reason: precharged_spend` |
 | Audit chain is valid | `GET /health` returns `chain_valid: true` |
+
+## Operations and observability
+
+- `GET /healthz` is a liveness check and returns `{"ok":true}`.
+- `GET /readyz` checks SQLite availability and audit-chain integrity; it
+  returns HTTP 503 if the service is not ready.
+- `GET /health` remains available for the original chain-validity check.
+- Request logs are newline-delimited JSON. Set `LOG_LEVEL` to configure the
+  server log level.
+- Set `SENTRY_DSN` on the server to enable Sentry error reporting. The SDK
+  disables default PII collection; do not expose the DSN to browser clients.
+- Set `PROMETHEUS_BEARER_TOKEN` to enable authenticated `GET /metrics`.
+  Configure Prometheus with
+  [prometheus.yml.example](./prometheus/prometheus.yml.example) and place the
+  same token in the configured `credentials_file`.
+
+The guarded k6 script makes requests only to an HTTP(S) URL whose hostname
+contains a distinct `staging` label:
+
+```sh
+k6 run -e STAGING_BASE_URL=https://governor.staging.example.com tests/load/staging.js
+```
+
+For image-based rollback instructions, including the effect of persistent
+database state, see [docs/rollback.md](./docs/rollback.md).
+
+## Python package and releases
+
+Package metadata and the canonical version are in [pyproject.toml](./pyproject.toml).
+Build a distribution locally with `python -m pip install build` followed by
+`python -m build`. Publishing runs from version tags (`v<version>`) through
+PyPI trusted publishing; configure the repository as a trusted publisher on
+PyPI before creating a release tag.
 
 ## Baseline
 

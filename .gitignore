@@ -14,6 +14,9 @@ venv/
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+build/
+dist/
+*.egg-info/
 .vscode/
 .idea/
 .DS_Store
