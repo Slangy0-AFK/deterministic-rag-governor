@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -17,14 +18,57 @@ from typing import Any, Callable, Iterable
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 
 load_dotenv()
 
+class JsonLogFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, Any] = {
+            "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        for field in ("method", "path", "status_code", "duration_ms"):
+            if hasattr(record, field):
+                payload[field] = getattr(record, field)
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        return json.dumps(payload, separators=(",", ":"))
+
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    handlers=[logging.StreamHandler()],
+)
+for _handler in logging.getLogger().handlers:
+    _handler.setFormatter(JsonLogFormatter())
+logger = logging.getLogger("governor")
+
 DB_PATH = os.getenv("GOVERNOR_DB", "./governor.db")
 CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma_db")
+RAG_COLLECTION = os.getenv("RAG_COLLECTION", "governor-documents")
+RAG_MODEL = os.getenv("RAG_MODEL", os.getenv("OLLAMA_MODEL", "llama3.2"))
+RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", os.getenv("EMBED_MODEL", "nomic-embed-text"))
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "4"))
 OPERATOR_KEY = os.getenv("GOVERNOR_OPERATOR_KEY", "")
+PROMETHEUS_BEARER_TOKEN = os.getenv("PROMETHEUS_BEARER_TOKEN", "")
 REFUSAL = "I cannot answer from the supplied sources."
 WORD_RE = re.compile(r"[A-Za-z0-9']+")
+SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+
+if SENTRY_DSN:
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=os.getenv("SENTRY_ENVIRONMENT", "production"),
+        send_default_pii=False,
+    )
 
 
 def _connect() -> sqlite3.Connection:
@@ -139,6 +183,35 @@ def hash_collection_contents(collection: Any) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _vector_store() -> Any:
+    """Create the persistent Chroma store only when a live RAG request needs it."""
+    from langchain_community.vectorstores import Chroma
+    from langchain_ollama import OllamaEmbeddings
+
+    return Chroma(
+        collection_name=RAG_COLLECTION,
+        persist_directory=CHROMA_PATH,
+        embedding_function=OllamaEmbeddings(model=RAG_EMBEDDING_MODEL, base_url=OLLAMA_BASE_URL),
+    )
+
+
+def _rag_retrieve(query: str, top_k: int = RAG_TOP_K) -> list[str]:
+    documents = _vector_store().similarity_search(query, k=top_k)
+    return [document.page_content for document in documents]
+
+
+def _rag_generate(query: str, source_chunks: list[str]) -> str:
+    from langchain_ollama import ChatOllama
+
+    prompt = (
+        "Answer the question using only the supplied sources. "
+        f"If the sources do not answer it, say exactly: {REFUSAL}\n\n"
+        f"Sources:\n{chr(10).join(source_chunks)}\n\nQuestion: {query}"
+    )
+    response = ChatOllama(model=RAG_MODEL, temperature=0, base_url=OLLAMA_BASE_URL).invoke(prompt)
+    return str(response.content)
+
+
 def verify_chain() -> bool:
     with _connect() as db:
         entries = db.execute("SELECT * FROM log ORDER BY id").fetchall()
@@ -221,6 +294,46 @@ def govern(agent_id: str, query: str, retrieve: Callable[[str], list[str]], gene
 
 class AgentRequest(BaseModel):
     agent_id: str
+    initial_balance: float = 10
+
+
+class GovernRequest(BaseModel):
+    agent_id: str
+    query: str
+    source_chunks: list[str] = []
+    answer: str
+    request_id: str | None = None
+
+
+class IngestRequest(BaseModel):
+    documents: list[str]
+
+
+class RagRequest(BaseModel):
+    agent_id: str
+    query: str
+    top_k: int = RAG_TOP_K
+    request_id: str | None = None
+
+
+class StructuredRequestLoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: Callable[..., Any]) -> Response:
+        started_at = time.perf_counter()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        finally:
+            logger.info(
+                "http_request",
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": status_code,
+                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                },
+            )
 
 
 @asynccontextmanager
@@ -230,6 +343,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Deterministic RAG Governor", lifespan=lifespan)
+app.add_middleware(StructuredRequestLoggingMiddleware)
 
 
 def _operator_required(key: str | None) -> None:
@@ -240,8 +354,13 @@ def _operator_required(key: str | None) -> None:
 @app.post("/admin/agent")
 def register_agent(request: AgentRequest, x_operator_key: str | None = Header(default=None)) -> dict[str, str]:
     _operator_required(x_operator_key)
+    if request.initial_balance < 0:
+        raise HTTPException(status_code=422, detail="initial_balance must be non-negative")
     with _connect() as db:
-        db.execute("INSERT OR IGNORE INTO agents(agent_id, created_at) VALUES (?, ?)", (request.agent_id, time.time()))
+        db.execute(
+            "INSERT OR IGNORE INTO agents(agent_id, balance, created_at) VALUES (?, ?, ?)",
+            (request.agent_id, request.initial_balance, time.time()),
+        )
     return {"status": "registered", "agent_id": request.agent_id}
 
 
@@ -253,6 +372,94 @@ def refresh(x_operator_key: str | None = Header(default=None)) -> dict[str, str]
     return {"status": "refreshed"}
 
 
+@app.post("/govern")
+def govern_request(request: GovernRequest) -> dict[str, Any]:
+    """Universal adapter for agents and model providers to test governance."""
+    return govern(
+        agent_id=request.agent_id,
+        query=request.query,
+        retrieve=lambda _: request.source_chunks,
+        generate=lambda _, __: request.answer,
+        request_id=request.request_id,
+    )
+
+
+@app.post("/rag/ingest")
+def ingest(request: IngestRequest, x_operator_key: str | None = Header(default=None)) -> dict[str, Any]:
+    """Add source documents to the persistent Chroma collection."""
+    _operator_required(x_operator_key)
+    documents = [document.strip() for document in request.documents if document.strip()]
+    if not documents:
+        raise HTTPException(status_code=422, detail="documents must contain non-empty text")
+    from langchain_core.documents import Document
+
+    store = _vector_store()
+    ids = [hashlib.sha256(document.encode()).hexdigest() for document in documents]
+    store.add_documents([Document(page_content=document) for document in documents], ids=ids)
+    return {"status": "ingested", "count": len(documents), "collection": RAG_COLLECTION}
+
+
+@app.post("/rag/query")
+def rag_query(request: RagRequest) -> dict[str, Any]:
+    """Retrieve from Chroma and generate through the deterministic governor."""
+    if request.top_k < 1 or request.top_k > 20:
+        raise HTTPException(status_code=422, detail="top_k must be between 1 and 20")
+    return govern(
+        agent_id=request.agent_id,
+        query=request.query,
+        retrieve=lambda query: _rag_retrieve(query, request.top_k),
+        generate=_rag_generate,
+        request_id=request.request_id,
+    )
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "chain_valid": verify_chain()}
+
+
+@app.get("/healthz")
+def healthz() -> dict[str, bool]:
+    return {"ok": True}
+
+
+@app.get("/readyz")
+def readyz() -> Response:
+    try:
+        with _connect() as db:
+            db.execute("SELECT 1")
+        chain_valid = verify_chain()
+    except sqlite3.Error:
+        logger.exception("readiness_check_failed")
+        return Response(
+            content=json.dumps({"ok": False, "reason": "database_unavailable"}),
+            status_code=503,
+            media_type="application/json",
+        )
+    if not chain_valid:
+        return Response(
+            content=json.dumps({"ok": False, "reason": "audit_chain_invalid"}),
+            status_code=503,
+            media_type="application/json",
+        )
+    return Response(
+        content=json.dumps({"ok": True}),
+        media_type="application/json",
+    )
+
+
+@app.get("/metrics")
+def metrics(authorization: str | None = Header(default=None)) -> Response:
+    if not PROMETHEUS_BEARER_TOKEN:
+        raise HTTPException(status_code=404, detail="metrics are not enabled")
+    expected = f"Bearer {PROMETHEUS_BEARER_TOKEN}"
+    if authorization is None or not hmac.compare_digest(authorization, expected):
+        raise HTTPException(status_code=401, detail="bearer token required")
+    return Response(
+        content=(
+            "# HELP governor_up Whether the governor process is serving metrics.\n"
+            "# TYPE governor_up gauge\n"
+            "governor_up 1\n"
+        ),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
