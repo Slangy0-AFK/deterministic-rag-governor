@@ -1,25 +1,153 @@
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/dougleslie00-afk/deterministic-rag-governor)
+# What this project is
 
-# Deterministic RAG Governor
+This project is a simple gatekeeper for AI agents that use document search and answer generation.
 
-Deterministic control plane for RAG agents. No LLM in the decision path.
+It does not decide what the answer should be. It does not replace the document search or the model. Instead, it sits in front of those steps and decides whether a request should be allowed through, whether it should be stopped, and whether it can be reused from a cache.
 
-Every request passes:
-identity → noise gate → loop gate → exact cache → retrieval cache
-→ pre-charged spend → RAG → citation check → release or hold
-→ hash-chained log → base-60 audit cycle
+In plain terms, it helps answer a basic question:
 
-**It is not:** containment, alignment, tamper-proof, credential-safe, or model-attesting.
+- Is this request from a valid agent?
+- Is it noisy or low-quality?
+- Has it been repeated too often?
+- Is there a cached answer we can safely reuse?
+- Is the answer grounded in the source material?
+- Is the agent still allowed to spend its budget?
+- Should we keep a record of what happened?
 
-**Baseline:** see `report.json`. Golden set runs in under a second, no LLM calls.
-**Gap:** the eval set is small and written by one author. Adversarial evaluation needed.
+# What it does for agents
 
-**Run:**
+The system is designed to reduce a few common bottlenecks in agent workflows:
 
-```sh
-docker compose up -d --build
-docker compose exec web python tests/golden_set.py --json report.json
+- repeated spam or looped requests
+- blocked or invalid identities
+- low-quality prompts that waste compute
+- repeated answers that do not reflect the source material
+- agents spending more than they should
+- weak traceability when something goes wrong
+
+The governed request path checks the following, in order:
+
+1. The agent is registered and active.
+2. The service is not restricted because of an audit-chain problem.
+3. The query has enough signal: at least 3 words, 8 letters or numbers, and 2 distinct words.
+4. The agent has made fewer than 3 allowed requests in the previous 300 seconds. The next request is held.
+5. If the adapter provides a version, the exact-answer cache is checked.
+6. If there is no exact answer, the retrieval cache is checked; on a miss, documents are retrieved.
+7. One unit is deducted from the agent's balance before answer generation.
+8. The generated answer is checked against the retrieved text using fixed word-pattern overlap rules.
+9. The decision is written to the hash-chained audit log.
+
+If a gate fails, the request is held with a reason. An exact-answer cache hit returns the saved answer immediately and skips retrieval, spending, and generation.
+
+# The bottlenecks it is meant to solve
+
+This project is focused on operational bottlenecks, not model quality.
+
+The main problems it tries to reduce are:
+
+- wasted inference on repeated questions
+- runaway requests from a single agent
+- vague or low-quality prompts that still trigger full processing
+- answers that sound plausible but do not reflect the actual source material
+- hard-to-debug request chains without a record of what happened
+- no clear spend control for agent activity
+
+It is not trying to solve:
+
+- model safety
+- prompt injection protection
+- secret handling
+- user identity trust
+- general AI alignment
+- multi-tenant security isolation
+
+Those are separate concerns and need different controls.
+
+# How the project decides
+
+This project is intentionally simple and deterministic.
+
+It does not use a model to judge whether an answer is acceptable. For an answer without quotation marks, at least 35% of its three-word sequences must also occur in retrieved text. For text inside quotation marks, at least 90% of each quoted section's five-word sequences must occur in retrieved text. The fixed refusal sentence is accepted without a source match. This is a simple text-overlap check, not a test of meaning or proof that an answer is true.
+
+The key idea is to make agent calls more predictable and less wasteful before they reach a model or a document pipeline.
+
+# Cache and audit behavior
+
+The project keeps two kinds of cache: generated answers and retrieved text chunks. Both use a key made from the agent ID, the normalized question, and the adapter version. If the adapter version is missing, caching is off. When source documents change, the adapter must report a new version; otherwise an old result can be reused.
+
+An exact-answer cache hit returns the saved answer without charging the agent's balance. A retrieval-cache hit reuses the saved text chunks, but the request still spends one unit before generating a new answer.
+
+# What gets stored
+
+For each governed decision, the hash-chained audit log stores:
+
+- request ID, supplied by the caller or generated by the service
+- agent ID
+- release or hold decision and its details
+- timestamp
+- previous and current entry hashes
+
+Cache keys and cached content are stored separately. The audit log does not store a request fingerprint or cache key. Its hash chain can reveal changes to logged entries, but it does not prevent someone with direct database access from changing the database.
+
+# Decision table
+
+This is the request path in a short form. A cache hit returns a saved result; it is not a failed check.
+
+```text
+CHECK                 CONTINUE / RESULT                  HOLD
+identity              registered + active                "identity"
+operator restriction  not restricted                     "operator_restriction"
+query signal          noise gate passes                   "noise_gate"
+rate                  fewer than 3 in 300 seconds          "loop_gate"
+exact-answer cache    miss -> continue; hit -> return     n/a
+retrieval cache       hit -> reuse; miss -> retrieve       retrieval error: "retrieval_error"
+spend                 deduct 1 before generation           insufficient balance: "precharged_spend"
+generation            answer generated                    "generation_error"
+source match          overlap threshold passes             "citation_check"
+audit                 decision added to hash chain        n/a
 ```
 
-**Thresholds to attack:** 90% quote overlap, 35% prose overlap, 3 loops in 300s.
-**License:** MIT.
+# What this project is not
+
+This project does not:
+
+- guarantee the model is safe
+- guarantee the agent is trustworthy
+- guarantee that the answer is correct
+- manage credentials or secrets
+- replace proper security controls
+- act as a complete production control plane for a large system
+
+It is a practical guardrail for a small, controlled deployment where the goal is to reduce waste, limit repetition, and provide basic traceability.
+
+# When to use it and when not to use it
+
+Use it when:
+
+- you are running a single team or a small internal toolchain
+- you want a simple lab or pilot setup
+- you need a clear gate before agent requests hit a model or retrieval layer
+- you want to reduce repeated work and make requests easier to explain
+
+Do not rely on it as the main control for:
+
+- large multi-tenant production systems
+- strict compliance environments
+- systems that need deep identity, security, or policy enforcement
+- deployments where the answer quality itself must be judged by a separate governance process
+
+# Example flow
+
+A request comes in, passes the identity, query, and rate checks, and then uses a matching cached result or retrieves text and spends one unit to generate an answer. The answer is returned only if it passes the fixed text-overlap check; otherwise the caller receives a hold and reason. The decision is recorded in the audit log.
+
+# Limitations
+
+This project is a baseline tool, not a full enterprise platform.
+
+It is best for a single-node, small-lab, or controlled internal environment. It stores its state in a local SQLite database and is not designed to replace a larger operational system with heavy traffic, many teams, or strict compliance requirements.
+
+In other words, it is useful for reducing obvious agent bottlenecks and making request behavior easier to understand, but it is not a complete production security or governance system on its own.
+
+# License
+
+MIT.
